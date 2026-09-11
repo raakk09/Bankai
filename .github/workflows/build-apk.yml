@@ -3,57 +3,93 @@ name: Build BANKAI APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get project
+      - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up Java
+      - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Gradle
-        run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
-          unzip -q gradle-8.11.1-bin.zip
-          echo "$PWD/gradle-8.11.1/bin" >> "$GITHUB_PATH"
-
       - name: Extract BANKAI project
+        shell: bash
         run: |
-          rm -rf bankai-src
+          set -e
           mkdir -p bankai-src
           unzip -q BANKAI_cloud_build.zip -d bankai-src
+          echo "Extracted files:"
+          find bankai-src -maxdepth 3 -type f | head -100
 
       - name: Find Android project
+        shell: bash
         run: |
-          PROJECT_DIR="$(find bankai-src -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit | xargs -r dirname)"
+          set -e
+
+          PROJECT_DIR=""
+
+          while IFS= read -r file; do
+            PROJECT_DIR="$(dirname "$file")"
+            break
+          done < <(find bankai-src -type f \( -name settings.gradle -o -name settings.gradle.kts \))
+
           if [ -z "$PROJECT_DIR" ]; then
-            PROJECT_DIR="$(find bankai-src -type f \( -name build.gradle -o -name build.gradle.kts \) -print -quit | xargs -r dirname)"
+            while IFS= read -r file; do
+              PROJECT_DIR="$(dirname "$file")"
+              break
+            done < <(find bankai-src -type f \( -name build.gradle -o -name build.gradle.kts \))
           fi
+
           if [ -z "$PROJECT_DIR" ]; then
-            echo "Android project not found"
+            echo "ERROR: Android project was not found"
             exit 1
           fi
+
+          echo "Android project found at:"
+          echo "$PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Build APK
+        shell: bash
         run: |
+          set -e
           cd "$PROJECT_DIR"
-          gradle assembleDebug
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug
+          else
+            wget -q https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
+            unzip -q gradle-8.11.1-bin.zip
+            ./gradle-8.11.1/bin/gradle assembleDebug
+          fi
+
+      - name: Find APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="$(find "$PROJECT_DIR" -type f -name '*.apk' | head -1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated"
+            exit 1
+          fi
+
+          echo "APK FOUND:"
+          echo "$APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Upload BANKAI APK
         uses: actions/upload-artifact@v4
         with:
           name: BANKAI-APK
-          path: "${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk"
-
-
-
-
+          path: ${{ env.APK_PATH }}
